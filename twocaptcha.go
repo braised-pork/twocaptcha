@@ -3,14 +3,17 @@ package twocaptcha
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
+	"time"
 
 	"github.com/valyala/fasthttp"
 )
 
 // Constants, shouldn't be modified (left as var because slices un-constable)
 var validTypes = []string{"recaptchaV2", "recaptchaV3", "funcaptcha"}
-var capRequestURL = "https://2captcha.com/in.php"
-var capResultURL = "https://2captcha.com/res.php"
+var validV3Scores = []string{".1", ".3", ".9"}
+var capRequestURL = "https://2captcha.com/in.php?json=1"
+var capResultURL = "https://2captcha.com/res.php?json=1"
 var captchaErrors = map[string]error{
 	"ERROR_WRONG_USER_KEY":     errors.New("invalidly formatted api key"),
 	"ERROR_KEY_DOES_NOT_EXIST": errors.New("invalid api key"),
@@ -35,22 +38,13 @@ var captchaErrors = map[string]error{
 // for instance, even for the same website solving both RecaptchaV2 and RecaptchaV3 require two
 // separate instances.
 type CaptchaInstance struct {
-	APIKey      string
-	CaptchaType string // must be within validTypes
-	CaptchaInfo map[string]interface{}
-	// CaptchaType = "recaptchaV2"
-	//   "sitekey":  recaptcha sitekey
-	//   "siteurl":  recaptcha website url
-	// CaptchaType = "recaptchaV3"
-	//   "sitekey":  recaptcha sitekey
-	//   "siteurl":  recaptcha website url
-	//   "action":   recaptchaV3 action (get, set, etc.)
-	//   "minScore": recaptchaV3 required score (.1/.3/.9)
-	// CaptchaType = "funcaptcha"
-	//   "key":      funcaptcha key
-	//   "surl":     funcaptcha surl (NOT siteurl url)
-	//   "siteurl":  funcaptcha website url
-	SettingInfo map[string]interface{}
+	APIKey        string
+	CaptchaType   string // must be within validTypes
+	CreateTaskURL string
+	// recaptchaV2 - sitekey, siteurl
+	// recaptchaV3 - sitkeey, siteurl, action, minScore
+	// funcaptcha  - sitekey, surl, siteurl
+	SettingInfo map[string]string
 	// "timeBetweenReqs" int: time between checking requests
 	HTTPClient *fasthttp.Client
 }
@@ -82,7 +76,7 @@ func checkError(responseStruct *captchaResponse) (errKey string, err error) {
 }
 
 // keyInMap checks whether a given key exists within a map ([string]string)
-func keyInMap(inputMap map[string]interface{}, key string) (result bool) {
+func keyInMap(inputMap map[string]string, key string) (result bool) {
 	_, result = inputMap[key]
 	return result
 }
@@ -102,7 +96,7 @@ func stringInSlice(inputSlice []string, key string) (result bool) {
 // initialization, NewInstance returns an empty CaptchaInstance and whatever error was found, else
 // it returns the populated instance and nil error.
 func NewInstance(
-	apiKey string, captchaType string, captchaParams map[string]interface{}, settingParams map[string]interface{},
+	apiKey string, captchaType string, captchaParams map[string]string, settingParams map[string]string,
 ) (instance CaptchaInstance, finalErr error) {
 OuterLoop:
 	for {
@@ -123,14 +117,18 @@ OuterLoop:
 		switch captchaType {
 		case "recaptchaV2":
 			if !(keyInMap(captchaParams, "sitekey") && keyInMap(captchaParams, "siteurl")) {
-				finalErr = errors.New("missing parameter(s) within captchaParams for recaptchav2")
+				finalErr = errors.New("missing parameter(s) within captchaParams for recaptchaV2")
 				break OuterLoop
 			}
 		case "recaptchaV3":
 			if !(keyInMap(captchaParams, "sitekey") && keyInMap(captchaParams, "siteurl") &&
 				keyInMap(captchaParams, "action") && keyInMap(captchaParams, "minscore")) {
-				finalErr = errors.New("missing parameter(s) within captchaParams for recaptchav3")
+				finalErr = errors.New("missing parameter(s) within captchaParams for recaptchaV3")
 				break OuterLoop
+			}
+			// Verify inputted score within allowed inputs
+			if !stringInSlice(validV3Scores, captchaParams["minscore"]) {
+				finalErr = errors.New("invalid recaptchaV3 score (.1/.3/.9)")
 			}
 		case "funcaptcha":
 			if !(keyInMap(captchaParams, "key") && keyInMap(captchaParams, "surl") &&
@@ -146,7 +144,7 @@ OuterLoop:
 		httpClient := &fasthttp.Client{}
 
 		var balanceStruct captchaResponse
-		requestURL := capResultURL + "?json=1&action=getBalance&key=" + apiKey
+		requestURL := capResultURL + "&action=getBalance&key=" + apiKey
 		// Verify api key by checking remaining balance - don't do anything if balance empty
 		for retryRequest := true; retryRequest; {
 			request := fasthttp.AcquireRequest()
@@ -172,9 +170,27 @@ OuterLoop:
 			break OuterLoop
 		}
 
+		createTaskURL := capRequestURL + "&key=" + instance.APIKey
+		switch instance.CaptchaType {
+		case "recaptchaV2":
+			requestURL += "method=userrecaptcha&googlekey=" + captchaParams["sitekey"] +
+				"&pageurl=" + captchaParams["siteurl"]
+		case "recaptchaV3":
+			requestURL += "method=userrecaptcha&version=v3&googlekey=" + captchaParams["sitekey"] +
+				"&pageurl=" + captchaParams["siteurl"] + "&action=" + captchaParams["action"] +
+				"&min_score=" + captchaParams["minScore"]
+		case "funcaptcha":
+			requestURL += "method=funcaptcha&publickey=" + captchaParams["sitekey"] +
+				"&surl=" + captchaParams["surl"] + "&pageurl=" + captchaParams["siteurl"]
+
+		default:
+			finalErr = errors.New("invalid captcha type (this shouldn't happen!)")
+			break OuterLoop
+		}
+
 		instance.APIKey = apiKey
 		instance.CaptchaType = captchaType
-		instance.CaptchaInfo = captchaParams
+		instance.CreateTaskURL = createTaskURL
 		instance.SettingInfo = settingParams
 		instance.HTTPClient = httpClient
 		break
@@ -183,34 +199,78 @@ OuterLoop:
 	return instance, finalErr
 }
 
-// solveRecaptchaV2 solves Google Recaptcha V2 (select matching images)
-func (instance *CaptchaInstance) solveRecaptchaV2() (solution string, finalErr error) {
-
-}
-
-// solveRecaptchaV3 solves Google Recaptcha V3 (hidden scoring system)
-func (instance *CaptchaInstance) solveRecaptchaV3() (solution string, finalErr error) {
-
-}
-
-// solveFuncaptcha solves Arkose Funcaptcha (correctly orient picture)
-func (instance *CaptchaInstance) solveFuncaptcha() (solution string, finalErr error) {
-
-}
-
 // SolveCaptcha solves for a given captcha type and returns the solution and error, if any.
-// If any errors are encountered, SolveCaptcha returns an empty solution string and passed error
-// from the checking function.
+// If any errors are encountered, SolveCaptcha returns an empty solution string and error.
 func (instance *CaptchaInstance) SolveCaptcha() (solution string, finalErr error) {
-	switch instance.CaptchaType {
-	case "recaptchaV2":
-		solution, finalErr = instance.solveRecaptchaV2()
-	case "recaptchaV3":
-		solution, finalErr = instance.solveRecaptchaV3()
-	case "funcaptcha":
-		solution, finalErr = instance.solveFuncaptcha()
-	default:
-		finalErr = errors.New("invalid captcha key (this shouldn't happen)")
+OuterLoop:
+	for {
+		var taskStruct captchaResponse
+		// Create captcha solving task using instance's CreateTaskURL
+		for retryRequest := true; retryRequest; {
+			request := fasthttp.AcquireRequest()
+			request.Header.SetMethod("GET")
+			request.SetRequestURI(instance.CreateTaskURL)
+			response := fasthttp.AcquireResponse()
+			instance.HTTPClient.Do(request, response)
+			if checkResponse(response) {
+				if err := json.Unmarshal(response.Body(), &taskStruct); err != nil {
+					finalErr = errors.New("error unmarshalling (this shouldn't happen)")
+					fasthttp.ReleaseRequest(request)
+					fasthttp.ReleaseResponse(response)
+					break OuterLoop
+				}
+				retryRequest = false
+			}
+			fasthttp.ReleaseRequest(request)
+			fasthttp.ReleaseResponse(response)
+		}
+
+		if _, err := checkError(&taskStruct); err != nil {
+			finalErr = err
+			break OuterLoop
+		}
+
+		captchaTaskID := taskStruct.Response // Should only include task id
+		checkSolutionURL := capResultURL + "&key=" + instance.APIKey + "&action=get&id=" + captchaTaskID
+		// Doing Atoi alot takes ... resources? Maybe turn SettingInfo into interface{} vs string map
+		secondsToSleep, _ := strconv.Atoi(instance.SettingInfo["timeBetweenReqs"])
+		timeToSleep := time.Second * time.Duration(secondsToSleep)
+
+	SolutionLoop:
+		for {
+			var solutionStruct captchaResponse
+			// Check for captcha completion, else sleep and retry
+			for retryRequest := true; retryRequest; {
+				request := fasthttp.AcquireRequest()
+				request.Header.SetMethod("GET")
+				request.SetRequestURI(checkSolutionURL)
+				response := fasthttp.AcquireResponse()
+				instance.HTTPClient.Do(request, response)
+				if checkResponse(response) {
+					if err := json.Unmarshal(response.Body(), &solutionStruct); err != nil {
+						finalErr = errors.New("error unmarshalling (this shouldn't happen)")
+						fasthttp.ReleaseRequest(request)
+						fasthttp.ReleaseResponse(response)
+						break OuterLoop
+					}
+					retryRequest = false
+				}
+				fasthttp.ReleaseRequest(request)
+				fasthttp.ReleaseResponse(response)
+			}
+
+			if _, err := checkError(&taskStruct); err != nil {
+				finalErr = err
+				break OuterLoop
+			}
+
+			if solutionStruct.Response != "CAPCHA_NOT_READY" {
+				solution = solutionStruct.Response
+				break SolutionLoop
+			}
+
+			time.Sleep(timeToSleep)
+		}
 	}
 
 	return solution, finalErr
