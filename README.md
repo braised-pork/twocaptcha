@@ -1,9 +1,9 @@
-# golang-twocaptcha
+# twocaptcha
 Golang package for solving captchas (currently RecaptchaV2, RecaptchaV3, and Funcaptcha) through the 2captcha API.
 
 # Install
 ```
-go get -u github.com/braised-pork/golang-twocaptcha/
+go get -u github.com/braised-pork/twocaptcha/
 ```
 
 # Required Parameters For Each Captcha Type
