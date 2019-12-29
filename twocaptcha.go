@@ -1,6 +1,7 @@
 package twocaptcha
 
 import (
+	"encoding/json"
 	"errors"
 
 	"github.com/valyala/fasthttp"
@@ -10,6 +11,24 @@ import (
 var validTypes = []string{"recaptchaV2", "recaptchaV3", "funcaptcha"}
 var capRequestURL = "https://2captcha.com/in.php"
 var capResultURL = "https://2captcha.com/res.php"
+var captchaErrors = map[string]error{
+	"ERROR_WRONG_USER_KEY":     errors.New("invalidly formatted api key"),
+	"ERROR_KEY_DOES_NOT_EXIST": errors.New("invalid api key"),
+	// https://2captcha.com/in.php
+	"ERROR_ZERO_BALANCE":         errors.New("[in] empty account balance"),
+	"ERROR_NO_SLOT_AVAILABLE":    errors.New("[in] captcha queue full"),
+	"IP_BANNED":                  errors.New("[in] ip banned, contact 2captcha"),
+	"ERROR_BAD_TOKEN_OR_PAGEURL": errors.New("[in] recapv2 invalid token/pageurl"),
+	"ERROR_GOOGLEKEY":            errors.New("[in] recapv2 invalid sitekey"),
+	"MAX_USER_TURN":              errors.New("[in] too many requests, temp 10s ban"),
+	// https://2captcha.com/res.php
+	"CAPTCHA_NOT_READY":        errors.New("[res] captcha not ready"),
+	"ERROR_CAPTCHA_UNSOLVABLE": errors.New("[res] unsolvable captcha"),
+	"ERROR_WRONG_ID_FORMAT":    errors.New("[res] invalidly formatted captcha id"),
+	"ERROR_WRONG_CAPTCHA_ID":   errors.New("[res] invalid captcha id"),
+	"ERROR_BAD_DUPLICATES":     errors.New("[res] not enough matches"),
+	"ERROR_EMPTY_ACTION":       errors.New("[res] action not found"),
+}
 
 // CaptchaInstance represents an individual captcha instance interfacing with the 2captcha API.
 // Different combinations of captcha type and parameters (captchaInfo) require separate instances;
@@ -34,6 +53,32 @@ type CaptchaInstance struct {
 	SettingInfo map[string]interface{}
 	// "timeBetweenReqs" int: time between checking requests
 	HTTPClient *fasthttp.Client
+}
+
+type captchaResponse struct {
+	Status   int    // 0 usually represents error, 1 represents valid request
+	Response string `json:"request"` // response body (called request)
+}
+
+// checkResponse checks whether a request was successful - for instance, some websites send
+// zero-length responses and 503s. This function primarily acts like a just-in-case and
+// currently does nothing.
+func checkResponse(rawResponse *fasthttp.Response) (result bool) {
+	result = true
+	return result
+}
+
+func checkError(responseStruct *captchaResponse) (errKey string, err error) {
+	if responseStruct.Status == 0 {
+		for key, value := range captchaErrors {
+			if responseStruct.Response == key {
+				errKey = key
+				err = value // error
+				break
+			}
+		}
+	}
+	return errKey, err
 }
 
 // keyInMap checks whether a given key exists within a map ([string]string)
@@ -98,6 +143,41 @@ OuterLoop:
 			break OuterLoop
 		}
 
+		httpClient := &fasthttp.Client{}
+
+		var balanceStruct captchaResponse
+		requestURL := capResultURL + "?json=1&action=getBalance&key=" + apiKey
+		// Verify api key by checking remaining balance - don't do anything if balance empty
+		for retryRequest := true; retryRequest; {
+			request := fasthttp.AcquireRequest()
+			request.Header.SetMethod("GET")
+			request.SetRequestURI(requestURL)
+			response := fasthttp.AcquireResponse()
+			httpClient.Do(request, response)
+			if checkResponse(response) {
+				if err := json.Unmarshal(response.Body(), &balanceStruct); err != nil {
+					finalErr = errors.New("error unmarshalling (this shouldn't happen)")
+					fasthttp.ReleaseRequest(request)
+					fasthttp.ReleaseResponse(response)
+					break OuterLoop
+				}
+				retryRequest = false
+			}
+			fasthttp.ReleaseRequest(request)
+			fasthttp.ReleaseResponse(response)
+		}
+
+		if _, err := checkError(&balanceStruct); err != nil {
+			finalErr = err
+			break OuterLoop
+		}
+
+		instance.APIKey = apiKey
+		instance.CaptchaType = captchaType
+		instance.CaptchaInfo = captchaParams
+		instance.SettingInfo = settingParams
+		instance.HTTPClient = httpClient
+		break
 	}
 
 	return instance, finalErr
