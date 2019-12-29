@@ -182,3 +182,21 @@ OuterLoop:
 
 	return instance, finalErr
 }
+
+// SolveCaptcha solves for a given captcha type and returns the solution and error, if any.
+// If any errors are encountered, SolveCaptcha returns an empty solution string and passed error
+// from the checking function.
+func (instance *CaptchaInstance) SolveCaptcha() (solution string, err error) {
+	switch instance.CaptchaType {
+	case "recaptchaV2":
+		solution, err = instance.SolveRecaptchaV2()
+	case "recaptchaV3":
+		solution, err = instance.SolveRecaptchaV3()
+	case "funcaptcha":
+		solution, err = instance.SolveFuncaptcha()
+	default:
+		err = errors.New("invalid captcha key (this shouldn't happen)")
+	}
+
+	return solution, err
+}
