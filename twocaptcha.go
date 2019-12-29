@@ -1,4 +1,4 @@
-package twocaptcha
+package main
 
 import (
 	"encoding/json"
@@ -16,8 +16,8 @@ var capRequestURL = "https://2captcha.com/in.php?json=1"
 var capResultURL = "https://2captcha.com/res.php?json=1"
 var captchaErrors = map[string]error{
 	// Automatically handled errors
-	"CAPCHA_NOT_READY":         errors.New("handled by program")
-	"ERROR_NO_SLOT_AVAILABLE":    errors.New("handled by program"),
+	"CAPCHA_NOT_READY":        errors.New("handled by program"),
+	"ERROR_NO_SLOT_AVAILABLE": errors.New("handled by program"),
 	// API key errors (for both endpoints)
 	"ERROR_WRONG_USER_KEY":     errors.New("invalidly formatted api key"),
 	"ERROR_KEY_DOES_NOT_EXIST": errors.New("invalid api key"),
@@ -212,7 +212,7 @@ OuterLoop:
 		// - Maybe turn SettingInfo into interface{} vs string map
 		// - Remove SettingInfo and instead have each setting as a field
 		secondsToSleep, _ := strconv.Atoi(instance.SettingInfo["timeBetweenReqs"])
-		timeToSleep := time.Second * time.Duration(secondsToSleep) 
+		timeToSleep := time.Second * time.Duration(secondsToSleep)
 
 	CreateTaskLoop:
 		for {
