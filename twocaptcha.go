@@ -112,7 +112,7 @@ OuterLoop:
 		// Verify that passed captchaType within valid types (validTypes) for proper initialization.
 		if !stringInSlice(validTypes, captchaType) {
 			finalErr = errors.New("invalid captcha type")
-			break
+			break OuterLoop
 		}
 
 		// Verify that captcha-specific keys exist within map (captchaParams), then pass entire
