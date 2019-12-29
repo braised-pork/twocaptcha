@@ -126,12 +126,12 @@ OuterLoop:
 			}
 		case "recaptchaV3":
 			if !(keyInMap(captchaParams, "sitekey") && keyInMap(captchaParams, "siteurl") &&
-				keyInMap(captchaParams, "action") && keyInMap(captchaParams, "minscore")) {
+				keyInMap(captchaParams, "action") && keyInMap(captchaParams, "minScore")) {
 				finalErr = errors.New("missing parameter(s) within captchaParams for recaptchaV3")
 				break OuterLoop
 			}
 			// Verify inputted score within allowed inputs
-			if !stringInSlice(validV3Scores, captchaParams["minscore"]) {
+			if !stringInSlice(validV3Scores, captchaParams["minScore"]) {
 				finalErr = errors.New("invalid recaptchaV3 score (.1/.3/.9)")
 			}
 		case "funcaptcha":
