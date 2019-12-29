@@ -22,11 +22,12 @@ var captchaErrors = map[string]error{
 	"ERROR_WRONG_USER_KEY":     errors.New("invalidly formatted api key"),
 	"ERROR_KEY_DOES_NOT_EXIST": errors.New("invalid api key"),
 	// https://2captcha.com/in.php
-	"ERROR_ZERO_BALANCE":         errors.New("[in] empty account balance"),
-	"IP_BANNED":                  errors.New("[in] ip banned, contact 2captcha"),
-	"ERROR_BAD_TOKEN_OR_PAGEURL": errors.New("[in] recapv2 invalid token/pageurl"),
-	"ERROR_GOOGLEKEY":            errors.New("[in] recapv2 invalid sitekey"),
-	"MAX_USER_TURN":              errors.New("[in] too many requests, temp 10s ban"),
+	"ERROR_ZERO_BALANCE":          errors.New("[in] empty account balance"),
+	"IP_BANNED":                   errors.New("[in] ip banned, contact 2captcha"),
+	"ERROR_BAD_TOKEN_OR_PAGEURL":  errors.New("[in] recapv2 invalid token/pageurl"),
+	"ERROR_GOOGLEKEY":             errors.New("[in] recapv2 invalid sitekey"),
+	"MAX_USER_TURN":               errors.New("[in] too many requests, temp 10s ban"),
+	"ERROR_ZERO_CAPTCHA_FILESIZE": errors.New("[in] this shouldn't happen"),
 	// https://2captcha.com/res.php
 	"CAPTCHA_NOT_READY":        errors.New("[res] captcha not ready"),
 	"ERROR_CAPTCHA_UNSOLVABLE": errors.New("[res] unsolvable captcha"),
@@ -45,7 +46,7 @@ type CaptchaInstance struct {
 	CaptchaType   string // must be within validTypes
 	CreateTaskURL string
 	// recaptchaV2 - sitekey, siteurl
-	// recaptchaV3 - sitkeey, siteurl, action, minScore
+	// recaptchaV3 - sitekey, siteurl, action, minScore
 	// funcaptcha  - sitekey, surl, siteurl
 	SettingInfo map[string]string
 	// "timeBetweenReqs" int: time between checking requests
@@ -134,7 +135,7 @@ OuterLoop:
 				finalErr = errors.New("invalid recaptchaV3 score (.1/.3/.9)")
 			}
 		case "funcaptcha":
-			if !(keyInMap(captchaParams, "key") && keyInMap(captchaParams, "surl") &&
+			if !(keyInMap(captchaParams, "sitekey") && keyInMap(captchaParams, "surl") &&
 				keyInMap(captchaParams, "siteurl")) {
 				finalErr = errors.New("missing parameter(s) within captchaParams for funcaptcha")
 				break OuterLoop
@@ -173,19 +174,18 @@ OuterLoop:
 			break OuterLoop
 		}
 
-		createTaskURL := capRequestURL + "&key=" + instance.APIKey
-		switch instance.CaptchaType {
+		createTaskURL := capRequestURL + "&key=" + apiKey + "&"
+		switch captchaType {
 		case "recaptchaV2":
-			requestURL += "method=userrecaptcha&googlekey=" + captchaParams["sitekey"] +
+			createTaskURL += "method=userrecaptcha&googlekey=" + captchaParams["sitekey"] +
 				"&pageurl=" + captchaParams["siteurl"]
 		case "recaptchaV3":
-			requestURL += "method=userrecaptcha&version=v3&googlekey=" + captchaParams["sitekey"] +
+			createTaskURL += "method=userrecaptcha&version=v3&googlekey=" + captchaParams["sitekey"] +
 				"&pageurl=" + captchaParams["siteurl"] + "&action=" + captchaParams["action"] +
 				"&min_score=" + captchaParams["minScore"]
 		case "funcaptcha":
-			requestURL += "method=funcaptcha&publickey=" + captchaParams["sitekey"] +
+			createTaskURL += "method=funcaptcha&publickey=" + captchaParams["sitekey"] +
 				"&surl=" + captchaParams["surl"] + "&pageurl=" + captchaParams["siteurl"]
-
 		default:
 			finalErr = errors.New("invalid captcha type (this shouldn't happen!)")
 			break OuterLoop
@@ -216,6 +216,7 @@ OuterLoop:
 
 	CreateTaskLoop:
 		for {
+			var taskStruct captchaResponse
 			// Create captcha solving task using instance's CreateTaskURL
 			for retryRequest := true; retryRequest; {
 				request := fasthttp.AcquireRequest()
@@ -273,17 +274,17 @@ OuterLoop:
 				fasthttp.ReleaseResponse(response)
 			}
 
-			if _, err := checkError(&taskStruct); err != nil {
+			if errKey, err := checkError(&solutionStruct); err != nil {
 				if errKey == "CAPCHA_NOT_READY" {
 					time.Sleep(timeToSleep)
-					continue
+					continue SolutionLoop
 				}
 				finalErr = err
 				break OuterLoop
 			}
 
 			solution = solutionStruct.Response
-			break SolutionLoop
+			break OuterLoop
 		}
 	}
 
