@@ -15,11 +15,14 @@ var validV3Scores = []string{".1", ".3", ".9"}
 var capRequestURL = "https://2captcha.com/in.php?json=1"
 var capResultURL = "https://2captcha.com/res.php?json=1"
 var captchaErrors = map[string]error{
+	// Automatically handled errors
+	"CAPCHA_NOT_READY":         errors.New("handled by program")
+	"ERROR_NO_SLOT_AVAILABLE":    errors.New("handled by program"),
+	// API key errors (for both endpoints)
 	"ERROR_WRONG_USER_KEY":     errors.New("invalidly formatted api key"),
 	"ERROR_KEY_DOES_NOT_EXIST": errors.New("invalid api key"),
 	// https://2captcha.com/in.php
 	"ERROR_ZERO_BALANCE":         errors.New("[in] empty account balance"),
-	"ERROR_NO_SLOT_AVAILABLE":    errors.New("[in] captcha queue full"),
 	"IP_BANNED":                  errors.New("[in] ip banned, contact 2captcha"),
 	"ERROR_BAD_TOKEN_OR_PAGEURL": errors.New("[in] recapv2 invalid token/pageurl"),
 	"ERROR_GOOGLEKEY":            errors.New("[in] recapv2 invalid sitekey"),
@@ -193,7 +196,7 @@ OuterLoop:
 		instance.CreateTaskURL = createTaskURL
 		instance.SettingInfo = settingParams
 		instance.HTTPClient = httpClient
-		break
+		break OuterLoop
 	}
 
 	return instance, finalErr
@@ -204,37 +207,48 @@ OuterLoop:
 func (instance *CaptchaInstance) SolveCaptcha() (solution string, finalErr error) {
 OuterLoop:
 	for {
-		var taskStruct captchaResponse
-		// Create captcha solving task using instance's CreateTaskURL
-		for retryRequest := true; retryRequest; {
-			request := fasthttp.AcquireRequest()
-			request.Header.SetMethod("GET")
-			request.SetRequestURI(instance.CreateTaskURL)
-			response := fasthttp.AcquireResponse()
-			instance.HTTPClient.Do(request, response)
-			if checkResponse(response) {
-				if err := json.Unmarshal(response.Body(), &taskStruct); err != nil {
-					finalErr = errors.New("error unmarshalling (this shouldn't happen)")
-					fasthttp.ReleaseRequest(request)
-					fasthttp.ReleaseResponse(response)
-					break OuterLoop
-				}
-				retryRequest = false
-			}
-			fasthttp.ReleaseRequest(request)
-			fasthttp.ReleaseResponse(response)
-		}
-
-		if _, err := checkError(&taskStruct); err != nil {
-			finalErr = err
-			break OuterLoop
-		}
-
-		captchaTaskID := taskStruct.Response // Should only include task id
-		checkSolutionURL := capResultURL + "&key=" + instance.APIKey + "&action=get&id=" + captchaTaskID
-		// Doing Atoi alot takes ... resources? Maybe turn SettingInfo into interface{} vs string map
+		var checkSolutionURL string
+		// Doing Atoi alot takes ... resources?
+		// - Maybe turn SettingInfo into interface{} vs string map
+		// - Remove SettingInfo and instead have each setting as a field
 		secondsToSleep, _ := strconv.Atoi(instance.SettingInfo["timeBetweenReqs"])
-		timeToSleep := time.Second * time.Duration(secondsToSleep)
+		timeToSleep := time.Second * time.Duration(secondsToSleep) 
+
+	CreateTaskLoop:
+		for {
+			// Create captcha solving task using instance's CreateTaskURL
+			for retryRequest := true; retryRequest; {
+				request := fasthttp.AcquireRequest()
+				request.Header.SetMethod("GET")
+				request.SetRequestURI(instance.CreateTaskURL)
+				response := fasthttp.AcquireResponse()
+				instance.HTTPClient.Do(request, response)
+				if checkResponse(response) {
+					if err := json.Unmarshal(response.Body(), &taskStruct); err != nil {
+						finalErr = errors.New("error unmarshalling (this shouldn't happen)")
+						fasthttp.ReleaseRequest(request)
+						fasthttp.ReleaseResponse(response)
+						break OuterLoop
+					}
+					retryRequest = false
+				}
+				fasthttp.ReleaseRequest(request)
+				fasthttp.ReleaseResponse(response)
+			}
+
+			if errKey, err := checkError(&taskStruct); err != nil {
+				if errKey == "ERROR_NO_SLOT_AVAILABLE" {
+					time.Sleep(timeToSleep)
+					continue
+				}
+				finalErr = err
+				break OuterLoop
+			}
+
+			captchaTaskID := taskStruct.Response // Should only include task id
+			checkSolutionURL = capResultURL + "&key=" + instance.APIKey + "&action=get&id=" + captchaTaskID
+			break CreateTaskLoop
+		}
 
 	SolutionLoop:
 		for {
@@ -260,16 +274,16 @@ OuterLoop:
 			}
 
 			if _, err := checkError(&taskStruct); err != nil {
+				if errKey == "CAPCHA_NOT_READY" {
+					time.Sleep(timeToSleep)
+					continue
+				}
 				finalErr = err
 				break OuterLoop
 			}
 
-			if solutionStruct.Response != "CAPCHA_NOT_READY" {
-				solution = solutionStruct.Response
-				break SolutionLoop
-			}
-
-			time.Sleep(timeToSleep)
+			solution = solutionStruct.Response
+			break SolutionLoop
 		}
 	}
 
