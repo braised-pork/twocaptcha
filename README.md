@@ -20,21 +20,22 @@ No clean way to go about this, so...
 # Usage
 ```
 apiKey := "insert_apikey_here"
-// Parameters example for RecaptchaV2
-captchaParams := twocaptcha.RecaptchaV2{
-  sitekey: "insert_sitekey_here",
-  siteurl: "insert_siteurl_here",
-}
 settingParams := twocaptcha.Settings{
   timeBetweenReqs: 5,
 }
 
 instance, err := twocaptcha.NewInstance(
   apiKey,
-  captchaType,
-  captchaParams,
   settingParams,
 }
+if err != nil {
+  // do something with err
+}
+
+solution, err := instance.SolveRecaptchaV2(
+  sitekey: "insert_sitekey_here",
+  siteurl: "insert_siteurl_here",
+)
 if err != nil {
   // do something with err
 }
