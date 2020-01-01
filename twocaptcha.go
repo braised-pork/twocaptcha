@@ -3,6 +3,7 @@ package twocaptcha
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -41,38 +42,12 @@ type Settings struct {
 	timeBetweenReqs int
 }
 
-// RecaptchaV2 contains fields to be passed into the NewInstance constructor
-type RecaptchaV2 struct {
-	sitekey string
-	siteurl string
-}
-
-// RecaptchaV3 contains fields to be passed into the NewInstance constructor
-type RecaptchaV3 struct {
-	sitekey  string
-	siteurl  string
-	action   string
-	minScore string
-}
-
-// Funcaptcha contains fields to be passed into the NewInstance constructor
-type Funcaptcha struct {
-	sitekey string
-	siteurl string
-	surl    string
-}
-
 // CaptchaInstance represents an individual captcha instance interfacing with the 2captcha API.
 // Different combinations of captcha type and parameters (captchaInfo) require separate instances;
 // for instance, even for the same website solving both RecaptchaV2 and RecaptchaV3 require two
 // separate instances.
 type CaptchaInstance struct {
-	APIKey        string
-	CaptchaType   string // must be within validTypes
-	CreateTaskURL string
-	// recaptchaV2 - sitekey, siteurl
-	// recaptchaV3 - sitekey, siteurl, action, minScore (.1/.3/.9)
-	// funcaptcha  - sitekey, surl, siteurl
+	APIKey      string
 	SettingInfo Settings
 	// "timeBetweenReqs" int: time between checking requests
 	HTTPClient *fasthttp.Client
@@ -88,6 +63,7 @@ type captchaResponse struct {
 // currently does nothing.
 func checkResponse(rawResponse *fasthttp.Response) (result bool) {
 	result = true
+
 	return result
 }
 
@@ -101,6 +77,7 @@ func checkError(responseStruct *captchaResponse) (errKey string, err error) {
 			}
 		}
 	}
+
 	return errKey, err
 }
 
@@ -118,6 +95,7 @@ func stringInSlice(inputSlice []string, key string) (result bool) {
 			break
 		}
 	}
+
 	return result
 }
 
@@ -125,26 +103,10 @@ func stringInSlice(inputSlice []string, key string) (result bool) {
 // initialization, NewInstance returns an empty CaptchaInstance and whatever error was found, else
 // it returns the populated instance and nil error.
 func NewInstance(
-	apiKey string, captchaInfo interface{}, settingInfo Settings,
+	apiKey string, settingInfo Settings,
 ) (instance CaptchaInstance, finalErr error) {
 OuterLoop:
 	for {
-		var captchaType string
-
-		if _, ok := captchaInfo.(RecaptchaV2); ok {
-			captchaType = "recaptchaV2"
-		} else if _, ok := captchaInfo.(RecaptchaV3); ok {
-			captchaType = "recaptchaV3"
-		} else if _, ok := captchaInfo.(Funcaptcha); ok {
-			captchaType = "funcaptcha"
-		}
-
-		// captchaType value unchanged from initial = invalid captchaInfo struct type
-		if captchaType == "" {
-			finalErr = errors.New("invalid captcha struct type")
-			break OuterLoop
-		}
-
 		// Verify fields within Settings correctly inputted
 		if settingInfo.timeBetweenReqs <= 0 {
 			finalErr = errors.New("invalid setting timeBetweenReqs value")
@@ -180,31 +142,10 @@ OuterLoop:
 			break OuterLoop
 		}
 
-		createTaskURL := capRequestURL + "&key=" + apiKey + "&"
-		// Captcha type should've already been verified earlier = type assertion should work
-		switch captchaType {
-		case "recaptchaV2":
-			createTaskURL += "method=userrecaptcha&googlekey=" + captchaInfo.(RecaptchaV2).sitekey +
-				"&pageurl=" + captchaInfo.(RecaptchaV2).siteurl
-		case "recaptchaV3":
-			createTaskURL += "method=userrecaptcha&version=v3&googlekey=" + captchaInfo.(RecaptchaV3).sitekey +
-				"&pageurl=" + captchaInfo.(RecaptchaV3).siteurl + "&action=" + captchaInfo.(RecaptchaV3).action +
-				"&min_score=" + captchaInfo.(RecaptchaV3).minScore
-		case "funcaptcha":
-			createTaskURL += "method=funcaptcha&publickey=" + captchaInfo.(Funcaptcha).sitekey +
-				"&surl=" + captchaInfo.(Funcaptcha).surl + "&pageurl=" + captchaInfo.(Funcaptcha).siteurl
-		default:
-			finalErr = errors.New("invalid captcha type (this shouldn't happen!)")
-			break OuterLoop
-		}
-
 		instance.APIKey = apiKey
-		instance.CaptchaType = captchaType
-		instance.CreateTaskURL = createTaskURL
 		instance.SettingInfo = settingInfo
 		instance.HTTPClient = httpClient
 		break OuterLoop
-
 	}
 
 	return instance, finalErr
@@ -212,7 +153,7 @@ OuterLoop:
 
 // SolveCaptcha solves for a given captcha type and returns the solution and error, if any.
 // If any errors are encountered, SolveCaptcha returns an empty solution string and error.
-func (instance *CaptchaInstance) SolveCaptcha() (solution string, finalErr error) {
+func (instance *CaptchaInstance) SolveCaptcha(createTaskURL string) (solution string, finalErr error) {
 OuterLoop:
 	for {
 		var checkSolutionURL string
@@ -228,7 +169,7 @@ OuterLoop:
 			for retryRequest := true; retryRequest; {
 				request := fasthttp.AcquireRequest()
 				request.Header.SetMethod("GET")
-				request.SetRequestURI(instance.CreateTaskURL)
+				request.SetRequestURI(createTaskURL)
 				response := fasthttp.AcquireResponse()
 				instance.HTTPClient.Do(request, response)
 				if checkResponse(response) {
@@ -294,6 +235,52 @@ OuterLoop:
 			break OuterLoop
 		}
 	}
+
+	return solution, finalErr
+}
+
+// SolveRecaptchaV2 solves RecaptchaV2 given input captcha info parameters.
+func (instance *CaptchaInstance) SolveRecaptchaV2(sitekey string, siteurl string) (solution string, finalErr error) {
+	createTaskURL := fmt.Sprintf(
+		"%s&key=%s&method=userrecaptcha&googlekey=%s&pageurl=%s",
+		capRequestURL, instance.APIKey, sitekey, siteurl,
+	)
+
+	solution, finalErr = instance.SolveCaptcha(createTaskURL)
+
+	return solution, finalErr
+}
+
+// SolveRecaptchaV3 solves RecaptchaV3 given input captcha info parameters.
+func (instance *CaptchaInstance) SolveRecaptchaV3(
+	sitekey string, siteurl string, action string, minScore string,
+) (solution string, finalErr error) {
+OuterLoop:
+	for {
+		if !stringInSlice(validV3Scores, minScore) {
+			finalErr = errors.New("invalid recaptchaV3 minScore (.1/.3/.9)")
+			break OuterLoop
+		}
+
+		createTaskURL := fmt.Sprintf(
+			"%s&key=%s&method=userrecaptcha&version=v3&googlekey=%s&pageurl=%s&action=%s&min_score=%s",
+			capRequestURL, instance.APIKey, sitekey, siteurl, action, minScore,
+		)
+
+		solution, finalErr = instance.SolveCaptcha(createTaskURL)
+	}
+
+	return solution, finalErr
+}
+
+// SolveFuncaptcha solves Funcaptcha given input captcha info parameters.
+func (instance *CaptchaInstance) SolveFuncaptcha(sitekey string, surl string, siteurl string) (solution string, finalErr error) {
+	createTaskURL := fmt.Sprintf(
+		"%s&key=%s&method=funcaptcha&publickey=%s&surl=%s&pageurl=%s",
+		capRequestURL, instance.APIKey, sitekey, surl, siteurl,
+	)
+
+	solution, finalErr = instance.SolveCaptcha(createTaskURL)
 
 	return solution, finalErr
 }
