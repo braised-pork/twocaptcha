@@ -3,7 +3,6 @@ package twocaptcha
 import (
 	"encoding/json"
 	"errors"
-	"strconv"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -37,6 +36,32 @@ var captchaErrors = map[string]error{
 	"ERROR_EMPTY_ACTION":       errors.New("[res] action not found"),
 }
 
+// Settings contains settings info passed into the NewInstance constructor
+type Settings struct {
+	timeBetweenReqs int
+}
+
+// RecaptchaV2 contains fields to be passed into the NewInstance constructor
+type RecaptchaV2 struct {
+	sitekey string
+	siteurl string
+}
+
+// RecaptchaV3 contains fields to be passed into the NewInstance constructor
+type RecaptchaV3 struct {
+	sitekey  string
+	siteurl  string
+	action   string
+	minScore string
+}
+
+// Funcaptcha contains fields to be passed into the NewInstance constructor
+type Funcaptcha struct {
+	sitekey string
+	siteurl string
+	surl    string
+}
+
 // CaptchaInstance represents an individual captcha instance interfacing with the 2captcha API.
 // Different combinations of captcha type and parameters (captchaInfo) require separate instances;
 // for instance, even for the same website solving both RecaptchaV2 and RecaptchaV3 require two
@@ -46,9 +71,9 @@ type CaptchaInstance struct {
 	CaptchaType   string // must be within validTypes
 	CreateTaskURL string
 	// recaptchaV2 - sitekey, siteurl
-	// recaptchaV3 - sitekey, siteurl, action, minScore
+	// recaptchaV3 - sitekey, siteurl, action, minScore (.1/.3/.9)
 	// funcaptcha  - sitekey, surl, siteurl
-	SettingInfo map[string]string
+	SettingInfo Settings
 	// "timeBetweenReqs" int: time between checking requests
 	HTTPClient *fasthttp.Client
 }
@@ -100,48 +125,29 @@ func stringInSlice(inputSlice []string, key string) (result bool) {
 // initialization, NewInstance returns an empty CaptchaInstance and whatever error was found, else
 // it returns the populated instance and nil error.
 func NewInstance(
-	apiKey string, captchaType string, captchaParams map[string]string, settingParams map[string]string,
+	apiKey string, captchaInfo interface{}, settingInfo Settings,
 ) (instance CaptchaInstance, finalErr error) {
 OuterLoop:
 	for {
-		// Verify that initialization key(s) (timeBetweenReqs) exist within map (settingParams).
-		if !(keyInMap(settingParams, "timeBetweenReqs")) {
-			finalErr = errors.New("missing parameter(s) within settingParams")
+		var captchaType string
+
+		if _, ok := captchaInfo.(RecaptchaV2); ok {
+			captchaType = "recaptchaV2"
+		} else if _, ok := captchaInfo.(RecaptchaV3); ok {
+			captchaType = "recaptchaV3"
+		} else if _, ok := captchaInfo.(Funcaptcha); ok {
+			captchaType = "funcaptcha"
+		}
+
+		// captchaType value unchanged from initial = invalid captchaInfo struct type
+		if captchaType == "" {
+			finalErr = errors.New("invalid captcha struct type")
 			break OuterLoop
 		}
 
-		// Verify that passed captchaType within valid types (validTypes) for proper initialization.
-		if !stringInSlice(validTypes, captchaType) {
-			finalErr = errors.New("invalid captcha type")
-			break OuterLoop
-		}
-
-		// Verify that captcha-specific keys exist within map (captchaParams), then pass entire
-		// captchaParams map into instance after switch statement completes.
-		switch captchaType {
-		case "recaptchaV2":
-			if !(keyInMap(captchaParams, "sitekey") && keyInMap(captchaParams, "siteurl")) {
-				finalErr = errors.New("missing parameter(s) within captchaParams for recaptchaV2")
-				break OuterLoop
-			}
-		case "recaptchaV3":
-			if !(keyInMap(captchaParams, "sitekey") && keyInMap(captchaParams, "siteurl") &&
-				keyInMap(captchaParams, "action") && keyInMap(captchaParams, "minScore")) {
-				finalErr = errors.New("missing parameter(s) within captchaParams for recaptchaV3")
-				break OuterLoop
-			}
-			// Verify inputted score within allowed inputs
-			if !stringInSlice(validV3Scores, captchaParams["minScore"]) {
-				finalErr = errors.New("invalid recaptchaV3 score (.1/.3/.9)")
-			}
-		case "funcaptcha":
-			if !(keyInMap(captchaParams, "sitekey") && keyInMap(captchaParams, "surl") &&
-				keyInMap(captchaParams, "siteurl")) {
-				finalErr = errors.New("missing parameter(s) within captchaParams for funcaptcha")
-				break OuterLoop
-			}
-		default: // shouldn't happen because captchaType previously verified
-			finalErr = errors.New("invalid captcha type (this shouldn't happen)")
+		// Verify fields within Settings correctly inputted
+		if settingInfo.timeBetweenReqs <= 0 {
+			finalErr = errors.New("invalid setting timeBetweenReqs value")
 			break OuterLoop
 		}
 
@@ -175,17 +181,18 @@ OuterLoop:
 		}
 
 		createTaskURL := capRequestURL + "&key=" + apiKey + "&"
+		// Captcha type should've already been verified earlier = type assertion should work
 		switch captchaType {
 		case "recaptchaV2":
-			createTaskURL += "method=userrecaptcha&googlekey=" + captchaParams["sitekey"] +
-				"&pageurl=" + captchaParams["siteurl"]
+			createTaskURL += "method=userrecaptcha&googlekey=" + captchaInfo.(RecaptchaV2).sitekey +
+				"&pageurl=" + captchaInfo.(RecaptchaV2).siteurl
 		case "recaptchaV3":
-			createTaskURL += "method=userrecaptcha&version=v3&googlekey=" + captchaParams["sitekey"] +
-				"&pageurl=" + captchaParams["siteurl"] + "&action=" + captchaParams["action"] +
-				"&min_score=" + captchaParams["minScore"]
+			createTaskURL += "method=userrecaptcha&version=v3&googlekey=" + captchaInfo.(RecaptchaV3).sitekey +
+				"&pageurl=" + captchaInfo.(RecaptchaV3).siteurl + "&action=" + captchaInfo.(RecaptchaV3).action +
+				"&min_score=" + captchaInfo.(RecaptchaV3).minScore
 		case "funcaptcha":
-			createTaskURL += "method=funcaptcha&publickey=" + captchaParams["sitekey"] +
-				"&surl=" + captchaParams["surl"] + "&pageurl=" + captchaParams["siteurl"]
+			createTaskURL += "method=funcaptcha&publickey=" + captchaInfo.(Funcaptcha).sitekey +
+				"&surl=" + captchaInfo.(Funcaptcha).surl + "&pageurl=" + captchaInfo.(Funcaptcha).siteurl
 		default:
 			finalErr = errors.New("invalid captcha type (this shouldn't happen!)")
 			break OuterLoop
@@ -194,9 +201,10 @@ OuterLoop:
 		instance.APIKey = apiKey
 		instance.CaptchaType = captchaType
 		instance.CreateTaskURL = createTaskURL
-		instance.SettingInfo = settingParams
+		instance.SettingInfo = settingInfo
 		instance.HTTPClient = httpClient
 		break OuterLoop
+
 	}
 
 	return instance, finalErr
@@ -211,8 +219,7 @@ OuterLoop:
 		// Doing Atoi alot takes ... resources?
 		// - Maybe turn SettingInfo into interface{} vs string map
 		// - Remove SettingInfo and instead have each setting as a field
-		secondsToSleep, _ := strconv.Atoi(instance.SettingInfo["timeBetweenReqs"])
-		timeToSleep := time.Second * time.Duration(secondsToSleep)
+		timeToSleep := time.Second * time.Duration(instance.SettingInfo.timeBetweenReqs)
 
 	CreateTaskLoop:
 		for {
