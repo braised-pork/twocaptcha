@@ -63,6 +63,7 @@ type captchaResponse struct {
 // currently does nothing.
 func checkResponse(rawResponse *fasthttp.Response) (result bool) {
 	result = true
+
 	return result
 }
 
@@ -76,6 +77,7 @@ func checkError(responseStruct *captchaResponse) (errKey string, err error) {
 			}
 		}
 	}
+
 	return errKey, err
 }
 
@@ -93,6 +95,7 @@ func stringInSlice(inputSlice []string, key string) (result bool) {
 			break
 		}
 	}
+
 	return result
 }
 
@@ -244,6 +247,7 @@ func (instance *CaptchaInstance) SolveRecaptchaV2(sitekey string, siteurl string
 	)
 
 	solution, finalErr = instance.SolveCaptcha(createTaskURL)
+
 	return solution, finalErr
 }
 
@@ -265,6 +269,7 @@ OuterLoop:
 
 		solution, finalErr = instance.SolveCaptcha(createTaskURL)
 	}
+
 	return solution, finalErr
 }
 
@@ -276,5 +281,6 @@ func (instance *CaptchaInstance) SolveFuncaptcha(sitekey string, surl string, si
 	)
 
 	solution, finalErr = instance.SolveCaptcha(createTaskURL)
+
 	return solution, finalErr
 }
