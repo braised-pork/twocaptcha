@@ -39,7 +39,7 @@ var captchaErrors = map[string]error{
 
 // Settings contains settings info passed into the NewInstance constructor
 type Settings struct {
-	timeBetweenReqs int
+	TimeBetweenReqs int
 }
 
 // CaptchaInstance represents an individual captcha instance interfacing with the 2captcha API.
@@ -49,7 +49,7 @@ type Settings struct {
 type CaptchaInstance struct {
 	APIKey      string
 	SettingInfo Settings
-	// "timeBetweenReqs" int: time between checking requests
+	// "TimeBetweenReqs" int: time between checking requests
 	HTTPClient *fasthttp.Client
 }
 
@@ -108,8 +108,8 @@ func NewInstance(
 OuterLoop:
 	for {
 		// Verify fields within Settings correctly inputted
-		if settingInfo.timeBetweenReqs <= 0 {
-			finalErr = errors.New("invalid setting timeBetweenReqs value")
+		if settingInfo.TimeBetweenReqs <= 0 {
+			finalErr = errors.New("invalid setting TimeBetweenReqs value")
 			break OuterLoop
 		}
 
@@ -160,7 +160,7 @@ OuterLoop:
 		// Doing Atoi alot takes ... resources?
 		// - Maybe turn SettingInfo into interface{} vs string map
 		// - Remove SettingInfo and instead have each setting as a field
-		timeToSleep := time.Second * time.Duration(instance.SettingInfo.timeBetweenReqs)
+		timeToSleep := time.Second * time.Duration(instance.SettingInfo.TimeBetweenReqs)
 
 	CreateTaskLoop:
 		for {
