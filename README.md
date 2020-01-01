@@ -20,14 +20,13 @@ No clean way to go about this, so...
 # Usage
 ```
 apiKey := "insert_apikey_here"
-captchaType := "recaptchaV2/recaptchaV3/funcaptcha"
 // Parameters example for RecaptchaV2
-captchaParams := map[string]string{
-  "sitekey": "insert_sitekey_here",
-  "siteurl": "insert_siteurl_here",
+captchaParams := twocaptcha.RecaptchaV2{
+  sitekey: "insert_sitekey_here",
+  siteurl: "insert_siteurl_here",
 }
-settingParams := map[string]string{
-  "timeBetweenReqs": "5",
+settingParams := twocaptcha.Settings{
+  timeBetweenReqs: 5,
 }
 
 instance, err := twocaptcha.NewInstance(
