@@ -10,7 +10,7 @@ go get -u "https://github.com/braised-pork/twocaptcha"
 ```
 apiKey := "insert_apikey_here"
 settingParams := twocaptcha.Settings{
-  timeBetweenReqs: 5,
+  TimeBetweenReqs: 5,
 }
 
 instance, err := twocaptcha.NewInstance(
