@@ -42,11 +42,11 @@ type Settings struct {
 	TimeBetweenReqs int
 }
 
-// CaptchaInstance represents an individual captcha instance interfacing with the 2captcha API.
+// Instance represents an individual captcha instance interfacing with the 2captcha API.
 // Different combinations of captcha type and parameters (captchaInfo) require separate instances;
 // for instance, even for the same website solving both RecaptchaV2 and RecaptchaV3 require two
 // separate instances.
-type CaptchaInstance struct {
+type Instance struct {
 	APIKey      string
 	SettingInfo Settings
 	// "TimeBetweenReqs" int: time between checking requests
@@ -99,12 +99,12 @@ func stringInSlice(inputSlice []string, key string) (result bool) {
 	return result
 }
 
-// NewInstance creates and populates a new CaptchaInstance. If any error is encountered during
-// initialization, NewInstance returns an empty CaptchaInstance and whatever error was found, else
+// NewInstance creates and populates a new Instance. If any error is encountered during
+// initialization, NewInstance returns an empty Instance and whatever error was found, else
 // it returns the populated instance and nil error.
 func NewInstance(
 	apiKey string, settingInfo Settings,
-) (instance CaptchaInstance, finalErr error) {
+) (instance Instance, finalErr error) {
 OuterLoop:
 	for {
 		// Verify fields within Settings correctly inputted
@@ -153,7 +153,7 @@ OuterLoop:
 
 // SolveCaptcha solves for a given captcha type and returns the solution and error, if any.
 // If any errors are encountered, SolveCaptcha returns an empty solution string and error.
-func (instance *CaptchaInstance) SolveCaptcha(createTaskURL string) (solution string, finalErr error) {
+func (instance *Instance) SolveCaptcha(createTaskURL string) (solution string, finalErr error) {
 OuterLoop:
 	for {
 		var checkSolutionURL string
@@ -240,7 +240,7 @@ OuterLoop:
 }
 
 // SolveRecaptchaV2 solves RecaptchaV2 given input captcha info parameters.
-func (instance *CaptchaInstance) SolveRecaptchaV2(sitekey string, siteurl string) (solution string, finalErr error) {
+func (instance *Instance) SolveRecaptchaV2(sitekey string, siteurl string) (solution string, finalErr error) {
 	createTaskURL := fmt.Sprintf(
 		"%s&key=%s&method=userrecaptcha&googlekey=%s&pageurl=%s",
 		capRequestURL, instance.APIKey, sitekey, siteurl,
@@ -252,7 +252,7 @@ func (instance *CaptchaInstance) SolveRecaptchaV2(sitekey string, siteurl string
 }
 
 // SolveRecaptchaV3 solves RecaptchaV3 given input captcha info parameters.
-func (instance *CaptchaInstance) SolveRecaptchaV3(
+func (instance *Instance) SolveRecaptchaV3(
 	sitekey string, siteurl string, action string, minScore string,
 ) (solution string, finalErr error) {
 OuterLoop:
@@ -274,7 +274,7 @@ OuterLoop:
 }
 
 // SolveFuncaptcha solves Funcaptcha given input captcha info parameters.
-func (instance *CaptchaInstance) SolveFuncaptcha(sitekey string, surl string, siteurl string) (solution string, finalErr error) {
+func (instance *Instance) SolveFuncaptcha(sitekey string, surl string, siteurl string) (solution string, finalErr error) {
 	createTaskURL := fmt.Sprintf(
 		"%s&key=%s&method=funcaptcha&publickey=%s&surl=%s&pageurl=%s",
 		capRequestURL, instance.APIKey, sitekey, surl, siteurl,
