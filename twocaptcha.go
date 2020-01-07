@@ -88,7 +88,7 @@ OuterLoop:
 		// Doing Atoi alot takes ... resources?
 		// - Maybe turn SettingInfo into interface{} vs string map
 		// - Remove SettingInfo and instead have each setting as a field
-		timeToSleep := time.Second * time.Duration(instance.SettingInfo.TimeBetweenReqs)
+		timeToSleep := time.Second * time.Duration(instance.Settings.TimeBetweenReqs)
 
 	CreateTaskLoop:
 		for {
@@ -113,10 +113,10 @@ OuterLoop:
 				fasthttp.ReleaseResponse(response)
 			}
 
-			if err := containsError(taskStruct); err != nil {
+			if err := containsError(&taskStruct); err != nil {
 				if err == errorNoSlot {
 					time.Sleep(timeToSleep)
-					continue
+					continue CreateTaskLoop
 				}
 
 				finalErr = err
@@ -138,12 +138,12 @@ OuterLoop:
 			for retryRequest := true; retryRequest; {
 				request := fasthttp.AcquireRequest()
 				request.Header.SetMethod("GET")
-				request.SetRequestURI(createTaskURL)
+				request.SetRequestURI(checkSolutionURL)
 
 				response := fasthttp.AcquireResponse()
 				instance.HTTPClient.Do(request, response)
 				if checkResponse(response) {
-					if err := json.Unmarshal(response.Body(), &taskStruct); err != nil {
+					if err := json.Unmarshal(response.Body(), &solutionStruct); err != nil {
 						finalErr = errorUnmarshal
 						fasthttp.ReleaseRequest(request)
 						fasthttp.ReleaseResponse(response)
@@ -154,6 +154,18 @@ OuterLoop:
 				fasthttp.ReleaseRequest(request)
 				fasthttp.ReleaseResponse(response)
 			}
+			if err := containsError(&solutionStruct); err != nil {
+				if err == errorNotReady {
+					time.Sleep(timeToSleep)
+					continue SolutionLoop
+				}
+
+				finalErr = err
+				break OuterLoop
+			}
+
+			solution = solutionStruct.Response
+			break OuterLoop
 		}
 	}
 
