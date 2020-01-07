@@ -34,11 +34,14 @@ func checkResponse(response *fasthttp.Response) (result bool) {
 	return result
 }
 
+// NewInstance creates and populates a new Instance. If any error is encountered during
+// initialization, NewInstance returns an empty Instance and whatever error was found, else
+// it returns the populated instance and nil error.
 func NewInstance(apiKey string, settings SettingInfo) (instance Instance, finalErr error) {
 OuterLoop:
 	for {
 		// Verify fields within Settings correctly inputted
-		if settings.TimeBetweenReqs <= 0 {
+		if settings.TimeBetweenRequests <= 0 {
 			finalErr = errors.New("invalid setting TimeBetweenReqs value")
 			break OuterLoop
 		}
@@ -88,7 +91,7 @@ OuterLoop:
 		// Doing Atoi alot takes ... resources?
 		// - Maybe turn SettingInfo into interface{} vs string map
 		// - Remove SettingInfo and instead have each setting as a field
-		timeToSleep := time.Second * time.Duration(instance.Settings.TimeBetweenReqs)
+		timeToSleep := time.Second * time.Duration(instance.Settings.TimeBetweenRequests)
 
 	CreateTaskLoop:
 		for {
