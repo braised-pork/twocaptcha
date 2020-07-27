@@ -46,7 +46,7 @@ OuterLoop:
 			break OuterLoop
 		}
 
-		httpClient := &fasthttp.Client{}
+		instance.HTTPClient = &fasthttp.Client{}
 
 		var balRespStruct captchaResponse
 		requestURL := capResultURL + "&action=getBalance&key=" + apiKey
@@ -77,7 +77,6 @@ OuterLoop:
 
 		instance.APIKey = apiKey
 		instance.Settings = settings
-		instance.HTTPClient = httpClient
 		break OuterLoop
 	}
 
