@@ -1,221 +1,123 @@
 package twocaptcha
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
+	"context"
+	"strings"
 	"time"
 
 	"github.com/valyala/fasthttp"
 )
 
-// SettingInfo contains settings info like time between successive checking requests. These
-// settings are passed into the captcha constructor by the user.
-type SettingInfo struct {
-	TimeBetweenRequests int
+// Advantage for multiplier: reduces overall solve time due to hanging
+// Different methods for persistent solving:
+// 1) X threads for Y * Z total captchas with float multiplier Z, cancel after finished
+// 2) X threads continuously solving captchas, externally cancelled
+
+// TODO find more elegant way to create multiple solving instances from one config?
+// TODO break into different chunks for mix-and-match
+// Solver stores parameters and statistics for the current session
+type Solver struct {
+	// should I un-export fields?
+	Channels
+	Threads       int     // 1/2) solving threads
+	TotalCaptchas int     // 1) captchas desired
+	Multiplier    float64 // 1) solving multiplier, init at 1!
+	// internal usage
+	errEnable bool               // whether to use errors channel
+	solveType int                // type 1 or 2 solving
+	numTasks  int                // 1) tasks counter
+	numSolved int                // 1) solved counter
+	apiKey    string             // api key for authentication
+	taskURL   string             // for creating captchas
+	timeout   time.Time          // global timeout
+	cancel    context.CancelFunc // for terminating solving
+	ctx       context.Context    // ^^
 }
 
-// Instance contains fields required for interfacing with the 2captcha API including the user's
-// API key, necessary settings (time between requests) and HTTP client for sending requests.
-type Instance struct {
-	APIKey     string
-	Settings   SettingInfo
-	HTTPClient *fasthttp.Client
+type Channels struct {
+	Solved chan string // captcha solutions
+	Errors chan error  // any encountered errors
 }
 
-type captchaResponse struct {
-	Status   int    `json:"status"` // 0 means error, 1 represents valid request
-	Response string `json:"request"`
-}
+// defaultSolver returns a default Solver instance to be modified.
+// Also checks whether the API key is valid and returns ok == false if not so.
+func defaultSolver(apiKey string, threads int, errEnable bool) (solver *Solver, ok bool) {
+	balanceURL := resEndpoint + "&key=" + apiKey + "&action=getBalance"
+	response, _ := compactGET(&fasthttp.Client{}, balanceURL) // ignore error?
+	validKey := !strings.Contains(string(response.Body()), "ERROR")
+	fasthttp.ReleaseResponse(response)
 
-func checkResponse(response *fasthttp.Response) (result bool) {
-	result = true
-
-	return result
-}
-
-// NewInstance creates and populates a new Instance. If any error is encountered during
-// initialization, NewInstance returns an empty Instance and whatever error was found, else
-// it returns the populated instance and nil error.
-func NewInstance(apiKey string, settings SettingInfo) (instance Instance, finalErr error) {
-OuterLoop:
-	for {
-		// Verify fields within Settings correctly inputted
-		if settings.TimeBetweenRequests <= 0 {
-			finalErr = errors.New("invalid setting TimeBetweenReqs value")
-			break OuterLoop
+	if validKey {
+		ctx, cancel := context.WithCancel(context.Background())
+		solver := &Solver{
+			Channels: Channels{
+				// initialize default channels
+				Solved: make(chan string, 100),
+			},
+			Threads: threads,
+			apiKey:  apiKey,
+			timeout: time.Now(), // just in case?
+			cancel:  cancel,
+			ctx:     ctx,
+		}
+		if errEnable {
+			solver.Channels.Errors = make(chan error, 100)
 		}
 
-		instance.HTTPClient = &fasthttp.Client{}
+		return solver, true
+	} else {
+		return nil, false
+	}
+}
 
-		var balRespStruct captchaResponse
-		requestURL := capResultURL + "&action=getBalance&key=" + apiKey
-		// Verify api key by checking remaining balance - don't do anything if balance empty
-		for retryRequest := true; retryRequest; {
-			request := fasthttp.AcquireRequest()
-			request.Header.SetMethod("GET")
-			request.SetRequestURI(requestURL)
-
-			response := fasthttp.AcquireResponse()
-			instance.HTTPClient.Do(request, response)
-			if checkResponse(response) {
-				if err := json.Unmarshal(response.Body(), &balRespStruct); err != nil {
-					finalErr = errorUnmarshal
-					fasthttp.ReleaseRequest(request)
-					fasthttp.ReleaseResponse(response)
-					break OuterLoop
-				}
-				retryRequest = false
-			}
-			fasthttp.ReleaseRequest(request)
-			fasthttp.ReleaseResponse(response)
+// NewFixedSolver returns a Solver instance which solves a fixed number of captchas of a given type.
+func NewFixedSolver(apiKey string, threads int, totalCaptchas int, multiplier float64, errEnable bool) (solver *Solver, ok bool) {
+	solver, ok = defaultSolver(apiKey, threads, errEnable)
+	if ok {
+		if errEnable {
+			solver.errEnable = true
 		}
-		if err := containsError(&balRespStruct); err != nil {
-			finalErr = err
-			break OuterLoop
-		}
-
-		instance.APIKey = apiKey
-		instance.Settings = settings
-		break OuterLoop
+		solver.solveType = 1
+		solver.TotalCaptchas = totalCaptchas
+		solver.Multiplier = multiplier
 	}
 
-	return instance, finalErr
+	return solver, ok
 }
 
-func (instance Instance) solveCaptcha(createTaskURL string) (solution string, finalErr error) {
-OuterLoop:
-	for {
-		var checkSolutionURL string
-		// Doing Atoi alot takes ... resources?
-		// - Maybe turn SettingInfo into interface{} vs string map
-		// - Remove SettingInfo and instead have each setting as a field
-		timeToSleep := time.Second * time.Duration(instance.Settings.TimeBetweenRequests)
-
-	CreateTaskLoop:
-		for {
-			var taskStruct captchaResponse
-			for retryRequest := true; retryRequest; {
-				request := fasthttp.AcquireRequest()
-				request.Header.SetMethod("GET")
-				request.SetRequestURI(createTaskURL)
-
-				response := fasthttp.AcquireResponse()
-				instance.HTTPClient.Do(request, response)
-				if checkResponse(response) {
-					if err := json.Unmarshal(response.Body(), &taskStruct); err != nil {
-						finalErr = errorUnmarshal
-						fasthttp.ReleaseRequest(request)
-						fasthttp.ReleaseResponse(response)
-						break OuterLoop
-					}
-					retryRequest = false
-				}
-				fasthttp.ReleaseRequest(request)
-				fasthttp.ReleaseResponse(response)
-			}
-
-			if err := containsError(&taskStruct); err != nil {
-				if err == errorNoSlot {
-					time.Sleep(timeToSleep)
-					continue CreateTaskLoop
-				}
-
-				finalErr = err
-				break OuterLoop
-			}
-
-			captchaTaskID := taskStruct.Response // only includes task ID
-			checkSolutionURL = fmt.Sprintf(
-				"%s&key=%s&action=get&id=%s",
-				capResultURL, instance.APIKey, captchaTaskID,
-			)
-
-			break CreateTaskLoop
+// NewPersistentSolver returns a Solver instance which continuously solves captchas until the output channel is closed.
+func NewPersistentSolver(apiKey string, threads int, errEnable bool) (solver *Solver, ok bool) {
+	solver, ok = defaultSolver(apiKey, threads, errEnable)
+	if ok {
+		if errEnable {
+			solver.errEnable = true
 		}
-
-	SolutionLoop:
-		for {
-			var solutionStruct captchaResponse
-			for retryRequest := true; retryRequest; {
-				request := fasthttp.AcquireRequest()
-				request.Header.SetMethod("GET")
-				request.SetRequestURI(checkSolutionURL)
-
-				response := fasthttp.AcquireResponse()
-				instance.HTTPClient.Do(request, response)
-				if checkResponse(response) {
-					if err := json.Unmarshal(response.Body(), &solutionStruct); err != nil {
-						finalErr = errorUnmarshal
-						fasthttp.ReleaseRequest(request)
-						fasthttp.ReleaseResponse(response)
-						break OuterLoop
-					}
-					retryRequest = false
-				}
-				fasthttp.ReleaseRequest(request)
-				fasthttp.ReleaseResponse(response)
-			}
-			if err := containsError(&solutionStruct); err != nil {
-				if err == errorNotReady {
-					time.Sleep(timeToSleep)
-					continue SolutionLoop
-				}
-
-				finalErr = err
-				break OuterLoop
-			}
-
-			solution = solutionStruct.Response
-			break OuterLoop
-		}
+		solver.solveType = 2
 	}
 
-	return solution, finalErr
+	return solver, ok
 }
 
-// SolveRecaptchaV2 solves Google RecaptchaV2
-func (instance *Instance) SolveRecaptchaV2(sitekey string, siteurl string) (solution string, finalErr error) {
-	createTaskURL := fmt.Sprintf(
-		"%s&key=%s&method=userrecaptcha&googlekey=%s&pageurl=%s",
-		capRequestURL, instance.APIKey, sitekey, siteurl,
-	)
-
-	solution, finalErr = instance.solveCaptcha(createTaskURL)
-
-	return solution, finalErr
+// SetRecaptchaV2 sets the URL for solving the designated RecaptchaV2.
+func (solver *Solver) SetRecaptchaV2(siteKey string, siteURL string) {
+	solver.taskURL = inEndpoint + "&key=" + solver.apiKey + "&method=userrecaptcha&googlekey=" + siteKey + "&pageurl=" +
+		siteURL // Sprintf performance >:(
 }
 
-// SolveRecaptchaV3 solves Google RecaptchaV3
-func (instance *Instance) SolveRecaptchaV3(
-	sitekey string, siteurl string, action string, minScore string,
-) (solution string, finalErr error) {
-OuterLoop:
-	for {
-		if !stringInSlice(validV3Scores, minScore) {
-			finalErr = errors.New("invalid recaptchaV3 minScore (.1/.3/.9)")
-			break OuterLoop
-		}
-
-		createTaskURL := fmt.Sprintf(
-			"%s&key=%s&method=userrecaptcha&version=v3&googlekey=%s&pageurl=%s&action=%s&min_score=%s",
-			capRequestURL, instance.APIKey, sitekey, siteurl, action, minScore,
-		)
-
-		solution, finalErr = instance.solveCaptcha(createTaskURL)
-	}
-
-	return solution, finalErr
+// SetRecaptchaV3 sets the URL for solving the designated RecaptchaV3.
+func (solver *Solver) SetRecaptchaV3(siteKey string, siteURL string, action string, minScore string) {
+	solver.taskURL = inEndpoint + "&key=" + solver.apiKey + "&method=userrecaptcha&version=v3&googlekey=" + siteKey +
+		"&pageurl=" + siteURL + "&action=" + action + "&min_score=" + minScore // Sprintf performance >:(
 }
 
-// SolveFuncaptcha solves Arkose Funcaptcha
-func (instance *Instance) SolveFuncaptcha(sitekey string, surl string, siteurl string) (solution string, finalErr error) {
-	createTaskURL := fmt.Sprintf(
-		"%s&key=%s&method=funcaptcha&publickey=%s&surl=%s&pageurl=%s",
-		capRequestURL, instance.APIKey, sitekey, surl, siteurl,
-	)
+// SetFuncaptcha sets the URL for solving the designated Funcaptcha.
+func (solver *Solver) SetFuncaptcha(siteKey string, sURL string, siteURL string) {
+	solver.taskURL = inEndpoint + "&key=" + solver.apiKey + "&method=funcaptcha&publickey=" + siteKey + "&surl=" + sURL +
+		"&pageurl=" + siteURL // Sprintf performance >:(
+}
 
-	solution, finalErr = instance.solveCaptcha(createTaskURL)
-
-	return solution, finalErr
+// SethCaptcha sets the URL for solving the designated hCaptcha.
+func (solver *Solver) SethCaptcha(siteKey string, siteURL string) {
+	solver.taskURL = inEndpoint + "&key=" + solver.apiKey + "&method=hcaptcha&sitekey=" + siteKey + "&pageurl=" +
+		siteURL // Sprintf performance >:(
 }
