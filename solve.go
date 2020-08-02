@@ -8,14 +8,16 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
+// Assume persistent is finished if any channels are closed
 // TODO find better way to manage errors, e.g.: panic cancel threshold
+// TODO find better way to deal with closed channels
 
 var dummyError = errors.New("")                       // non captcha-related error
 var inEndpoint = "https://2captcha.com/in.php?json=1" // ... maintainability?
 var resEndpoint = "https://2captcha.com/res.php?json=1"
 var checkTimeout = 100 * time.Millisecond // time to wait between attempting to close solutions channel
 
-// waitTimeout waits out the duration of any timeout if any exists
+// waitTimeout waits out the duration of any timeout if any exists.
 func (solver *Solver) waitTimeout() {
 	now := time.Now()
 	if now.Before(solver.timeout) { // wait out the timeout
@@ -23,7 +25,7 @@ func (solver *Solver) waitTimeout() {
 	}
 }
 
-// solveCaptcha solves a single captcha through 2captcha using the provided URL
+// solveCaptcha solves a single captcha through 2captcha using the provided URL.
 // Any request-related errors are returned and treated as insignificant, TODO flesh out
 func (solver *Solver) solveCaptcha(client *fasthttp.Client) (result string, finalErr error) {
 	var response *fasthttp.Response
@@ -92,6 +94,14 @@ func (solver *Solver) persistCaptcha(swg *sizedwaitgroup.SizedWaitGroup) {
 			break
 		}
 
+		// check channel closure before creating new task
+		if solver.solveType == 2 { // check if channel closed, quit
+			_, closed := <-solver.Channels.Solved
+			if closed {
+				return
+			}
+		}
+
 		// check if total number of tasks created, terminate thread if so
 		// if task fails, that thread will keep retrying so it's ok to do this
 		if solver.solveType == 1 && solver.numTasks >= int(float64(solver.TotalCaptchas)*solver.Multiplier) {
@@ -102,8 +112,25 @@ func (solver *Solver) persistCaptcha(swg *sizedwaitgroup.SizedWaitGroup) {
 		// note that only significant errors are passed, i.e.: not slot issues
 		result, err = solver.solveCaptcha(client)
 		if err != nil && err != dummyError {
-			solver.Channels.Errors <- err
+			if solver.errEnable {
+				// check channel closure when attempting to push error
+				if solver.solveType == 2 { // check if channel closed, quit
+					_, closed := <-solver.Channels.Errors
+					if closed {
+						return
+					}
+				}
+				solver.Channels.Errors <- err
+			}
 			continue
+		}
+
+		// check channel closure when attempting to push solution
+		if solver.solveType == 2 { // check if channel closed, quit
+			_, closed := <-solver.Channels.Solved
+			if closed {
+				return
+			}
 		}
 
 		solver.Channels.Solved <- result
@@ -116,7 +143,7 @@ func (solver *Solver) persistCaptcha(swg *sizedwaitgroup.SizedWaitGroup) {
 
 // solvingRuntime manages the threads which solve captchas and closes channels if necessary.
 // TODO maybe return analytics from the function?
-func (solver *Solver) SolvingRuntime(taskURL string) {
+func (solver *Solver) SolvingRuntime() {
 	swg := sizedwaitgroup.New(solver.Threads)
 	for i := 0; i < solver.Threads; i++ {
 		swg.Add()
@@ -129,6 +156,7 @@ func (solver *Solver) SolvingRuntime(taskURL string) {
 		for {
 			if len(solver.Channels.Solved) == 0 {
 				close(solver.Channels.Solved)
+				close(solver.Channels.Errors)
 				break
 			}
 
